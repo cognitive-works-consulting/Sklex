@@ -3,12 +3,13 @@ import numpy as np
 from sklearn.base import RegressorMixin
 from sklearn.utils.validation import check_X_y
 from sklex.rvm._BaseRVM import _BaseRVM
+from typing import Self
 
 
 class RVR(RegressorMixin, _BaseRVM):
     """Relevance Vector Machine for Regression.
     """
-    def fit(self, X, y):
+    def fit(self, X: np.ndarray, y: np.ndarray) -> Self:
         """Fit the RVR to the training data."""
         X, y = check_X_y(X, y)
 

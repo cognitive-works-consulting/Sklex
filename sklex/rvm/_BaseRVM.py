@@ -2,7 +2,7 @@
 import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.metrics.pairwise import linear_kernel, polynomial_kernel, rbf_kernel
-from typing import Any, Callable
+from typing import Any, Callable, Self
 
 
 class _Kernel:
@@ -127,7 +127,7 @@ class _BaseRVM(BaseEstimator):
         }
         return params
         
-    def set_params(self, **parameters) -> BaseEstimator:
+    def set_params(self, **parameters) -> Self:
         """Set parameters using kwargs."""
         for parameter, value in parameters.items():
             setattr(self, parameter, value)
