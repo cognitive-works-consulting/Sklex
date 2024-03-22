@@ -1,0 +1,24 @@
+name: Publication workflow
+on:
+    - push
+jobs:
+    build:
+        name: Build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v3
+            
+            - uses: actions/setup-python@v4.0.0
+              with:
+                python-version: "3.11.8"
+
+            - uses: snok/install-poetry@v1.3.4
+              with:
+                version: 1.8.1
+                virtualenvs-in-project: true
+            
+            - name: Install dependencies
+              run: poetry install
+              
+            - name: Launch formatting, linting, and tests
+              run: source .venv/bin/activate; tox -p
