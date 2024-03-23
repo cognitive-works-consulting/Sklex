@@ -1,7 +1,9 @@
 # coding: utf-8
 import numpy as np
+from abc import abstractmethod
 from sklearn.base import BaseEstimator
 from sklearn.metrics.pairwise import linear_kernel, polynomial_kernel, rbf_kernel
+from sklearn.utils.validation import check_X_y
 from typing import Any, Callable, Self
 
 
@@ -108,7 +110,67 @@ class _BaseRVM(BaseEstimator):
             self.phi = self.phi[:, keep_alpha]
             self.sigma_ = self.sigma_[np.ix_(keep_alpha, keep_alpha)]
             self.m_ = self.m_[keep_alpha]
-            
+    
+    @abstractmethod
+    def _posterior(self):
+        pass
+    
+    def fit(self, X: np.ndarray, y: np.ndarray) -> Self:
+        """Fit the model to the training data."""
+        X, y = check_X_y(X, y)
+
+        n_samples, n_features = X.shape
+
+        self.phi = self.kernel(X, X)
+
+        n_basis_functions = self.phi.shape[1]
+
+        self.relevance_ = X
+        self.y = y
+
+        self.alpha_ = self.alpha * np.ones(n_basis_functions)
+        self.beta_ = self.beta
+
+        self.m_ = np.zeros(n_basis_functions)
+
+        self.alpha_old = self.alpha_
+        
+        # TODO: Rewrite this part with something more efficient.
+        for i in range(self.n_iter):
+            self._posterior()
+
+            self.gamma = 1 - self.alpha_ * np.diag(self.sigma_)
+            self.alpha_ = self.gamma / (self.m_ ** 2)
+
+            if not self.beta_fixed:
+                self.beta_ = (n_samples - np.sum(self.gamma))/(
+                    np.sum((y - np.dot(self.phi, self.m_)) ** 2))
+
+            self._prune()
+
+            if self.verbose:
+                print("Iteration: {}".format(i))
+                print("Alpha: {}".format(self.alpha_))
+                print("Beta: {}".format(self.beta_))
+                print("Gamma: {}".format(self.gamma))
+                print("m: {}".format(self.m_))
+                print("Relevance Vectors: {}".format(self.relevance_.shape[0]))
+                print()
+
+            delta = np.amax(np.absolute(self.alpha_ - self.alpha_old))
+
+            if delta < self.tol and i > 1:
+                break
+
+            self.alpha_old = self.alpha_
+
+        if self.bias:
+            self.bias = self.m_[-1]
+        else:
+            self.bias = None
+
+        return self
+    
     def get_params(self, deep=True) -> dict[str, Any]:
         """Return parameters as a dictionary."""
         params = {

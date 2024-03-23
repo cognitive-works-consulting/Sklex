@@ -1,82 +1,94 @@
 # coding: utf-8
 import numpy as np
+from scipy.optimize import minimize
+from scipy.special import expit
 from sklearn.base import ClassifierMixin
-from sklearn.utils.validation import check_X_y
+from sklearn.multiclass import OneVsOneClassifier
 from sklex.rvm._BaseRVM import _BaseRVM
+from typing import Any
 
-class RVR(ClassifierMixin, _BaseRVM):
-    """Relevance Vector Machine for Regression.
+
+class RVC(_BaseRVM, ClassifierMixin):
+    """Relevance Vector Machine for classification.
     """
+    def __init__(self, n_iter_posterior=50, **kwargs) -> None:
+        """Copy params to object properties, no validation."""
+        self.n_iter_posterior = n_iter_posterior
+        self.multi_ = OneVsOneClassifier(self)
+        super(RVC, self).__init__(**kwargs)
+
+    def get_params(self, deep=True) -> dict[str, Any]:
+        """Return parameters as a dictionary."""
+        params = super(RVC, self).get_params(deep=deep)
+        params['n_iter_posterior'] = self.n_iter_posterior
+        return params
+
+    def _classify(self, m, phi) -> Any:
+        return expit(np.dot(phi, m))
+
+    def _log_posterior(self, m, alpha, phi, t) -> tuple[np.ndarray, np.ndarray]:
+
+        y = self._classify(m, phi)
+
+        log_p = -1 * (np.sum(np.log(y[t == 1]), 0) +
+                      np.sum(np.log(1-y[t == 0]), 0))
+        log_p = log_p + 0.5*np.dot(m.T, np.dot(np.diag(alpha), m))
+
+        jacobian = np.dot(np.diag(alpha), m) - np.dot(phi.T, (t-y))
+
+        return log_p, jacobian
+
+    def _hessian(self, m, alpha, phi, t) -> np.ndarray:
+        y = self._classify(m, phi)
+        B = np.diag(y*(1-y))
+        return np.diag(alpha) + np.dot(phi.T, np.dot(B, phi))
+
+    def _posterior(self) -> None:
+        result = minimize(
+            fun=self._log_posterior,
+            hess=self._hessian,
+            x0=self.m_,
+            args=(self.alpha_, self.phi, self.t),
+            method='Newton-CG',
+            jac=True,
+            options={
+                'maxiter': self.n_iter_posterior
+            }
+        )
+
+        self.m_ = result.x
+        self.sigma_ = np.linalg.inv(
+            self._hessian(self.m_, self.alpha_, self.phi, self.t)
+        )
+
     def fit(self, X, y):
-        """Fit the RVR to the training data."""
-        X, y = check_X_y(X, y)
+        """Check target values and fit model."""
+        self.classes_ = np.unique(y)
+        n_classes = len(self.classes_)
 
-        n_samples, n_features = X.shape
-
-        self.phi = self.kernel(X, X)
-
-        n_basis_functions = self.phi.shape[1]
-
-        self.relevance_ = X
-        self.y = y
-
-        self.alpha_ = self.alpha * np.ones(n_basis_functions)
-        self.beta_ = self.beta
-
-        self.m_ = np.zeros(n_basis_functions)
-
-        self.alpha_old = self.alpha_
-        
-        # TODO: Rewrite this part with something more efficient.
-        for i in range(self.n_iter):
-            self._posterior()
-
-            self.gamma = 1 - self.alpha_*np.diag(self.sigma_)
-            self.alpha_ = self.gamma/(self.m_ ** 2)
-
-            if not self.beta_fixed:
-                self.beta_ = (n_samples - np.sum(self.gamma))/(
-                    np.sum((y - np.dot(self.phi, self.m_)) ** 2))
-
-            self._prune()
-
-            if self.verbose:
-                print("Iteration: {}".format(i))
-                print("Alpha: {}".format(self.alpha_))
-                print("Beta: {}".format(self.beta_))
-                print("Gamma: {}".format(self.gamma))
-                print("m: {}".format(self.m_))
-                print("Relevance Vectors: {}".format(self.relevance_.shape[0]))
-                print()
-
-            delta = np.amax(np.absolute(self.alpha_ - self.alpha_old))
-
-            if delta < self.tol and i > 1:
-                break
-
-            self.alpha_old = self.alpha_
-
-        if self.bias:
-            self.bias = self.m_[-1]
+        if n_classes < 2:
+            raise ValueError("Need 2 or more classes.")
+        elif n_classes == 2:
+            self.t = np.zeros(y.shape)
+            self.t[y == self.classes_[1]] = 1
+            return super(RVC, self).fit(X, self.t)
         else:
-            self.bias = None
+            self.multi_.fit(X, y)
+            return self
 
-        return self
-       
-    def _posterior(self):
-        """Compute the posterior distriubtion over weights."""
-        i_s = np.diag(self.alpha) + self.beta * np.dot(self.phi.T, self.phi)
-        self.sigma_ = np.linalg.inv(i_s)
-        self.m_ = self.beta * np.dot(self.sigma_, np.dot(self.phi.T, self.y))
-
-    def predict(self, X, eval_MSE=False):
-        """Evaluate the RVR model at x."""
+    def predict_proba(self, X):
+        """Return an array of class probabilities."""
         phi = self.kernel(X, self.relevance_)
+        y = self._classify(self.m_, phi)
+        return np.column_stack((1-y, y))
 
-        y = np.dot(phi, self.m_)
-
-        if eval_MSE:
-            MSE = (1/self.beta) + np.dot(phi, np.dot(self.sigma_, phi.T))
-            return y, MSE[:, 0]
+    def predict(self, X):
+        """Return an array of classes for each input."""
+        if len(self.classes_) == 2:
+            y = self.predict_proba(X)
+            res = np.empty(y.shape[0], dtype=self.classes_.dtype)
+            res[y[:, 1] <= 0.5] = self.classes_[0]
+            res[y[:, 1] >= 0.5] = self.classes_[1]
+            return res
         else:
-            return y
+            return self.multi_.predict(X)
